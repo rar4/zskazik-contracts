@@ -10,9 +10,15 @@ Deployed 2026-11-21 from the burner wallet (master/owner):
 |------------|--------------------------------------------|
 | CasinoToken| 0x79d782fFb87a643b9C5369F54f0c1fCa02f40A89 |
 | Treasury   | 0xa84A9505753e0bE52486E181bD9dde77D261ad56 |
-| CoinFlip   | 0x22157527B27C4E3174215126c100f66B041cF082 |
-| Dice       | 0xe3192207Fa9Da7BdBFfd09E0F01FB49C14E59b04 |
-| Plinko     | 0x1a2a89BFDD940B34f62237b6cCb4b8D2644a37cD |
+| Forwarder  | 0x0FA6F0693cd56D6dE6DD0297C75CCf41FafCbda7 |
+| CoinFlip   | 0xAF7fDDa566905860D6BF3AdB4cd73Dc771Fab366 |
+| Dice       | 0xDcCBA84D53BF3daa275f57cA7e81b202892EfC14 |
+| Plinko     | 0xdDe34251ad0E1EeD50602680FACdA3e4C66E7f08 |
+
+Games use ERC-2771 (_msgSender), so bets can arrive via the TrustedForwarder
+session-key meta-tx flow (0 wallet popups after one-time setSigner).
+Relayer wallet 0x47d1050D5977528e46DD239522B3C6bCc12D8c3E (key in Vercel
+RELAYER_PRIVATE_KEY, server-only) submits meta-bets and auto-resolves.
 
 RPC: https://sepolia.base.org · Explorer: https://sepolia.basescan.org
 
