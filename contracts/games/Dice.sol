@@ -47,6 +47,13 @@ contract Dice is GameBase {
     {
         if (wager == 0) revert ZeroWager();
         if (target < MIN_TARGET || target > MAX_TARGET) revert BadTarget();
+        // Fail fast at placement instead of stranding at settle (same
+        // pre-check Plinko does): at target 95 the payout is 19.6x, so a
+        // large wager can exceed maxPayout and settleBet would revert
+        // forever, stranding the stake until the refund timeout.
+        uint256 worst = (wager * PAYOUT_NUM) / (100 - target);
+        require(worst <= treasury.maxPayout(), "dice: exceeds maxPayout");
+        require(worst <= wager * treasury.maxWinMultiplier(), "dice: exceeds multiplier");
         bytes32 treasuryBetId;
         (gameBetId, treasuryBetId) = _nextIds(msg.sender);
         rolls[gameBetId] = Roll({

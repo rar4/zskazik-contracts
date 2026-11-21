@@ -40,6 +40,13 @@ contract CoinFlip is GameBase {
         returns (bytes32 gameBetId)
     {
         if (wager == 0) revert ZeroWager();
+        // Fail fast at placement instead of stranding at settle (same
+        // pre-check Plinko does): if the max win would exceed Treasury
+        // caps, settleBet would revert forever and the stake would sit
+        // in escrow until the refund timeout.
+        uint256 worst = (wager * PAYOUT_BPS) / 10_000;
+        require(worst <= treasury.maxPayout(), "flip: exceeds maxPayout");
+        require(worst <= wager * treasury.maxWinMultiplier(), "flip: exceeds multiplier");
         bytes32 treasuryBetId;
         (gameBetId, treasuryBetId) = _nextIds(msg.sender);
         flips[gameBetId] = Flip({

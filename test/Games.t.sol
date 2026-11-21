@@ -250,6 +250,20 @@ contract GamesTest is Test {
         plinko.drop(16, 10_000_000 * 1e18);
     }
 
+    function test_Flip_ExceedsPayoutRevertsAtPlace() public {
+        // 1.96x on huge wager exceeds 50M maxPayout -> place reverts, no stuck funds
+        vm.expectRevert("flip: exceeds maxPayout");
+        vm.prank(alice);
+        flip.flip(true, 30_000_000 * 1e18);
+    }
+
+    function test_Dice_ExceedsPayoutRevertsAtPlace() public {
+        // target 95 -> 19.6x; huge wager exceeds 50M maxPayout -> place reverts
+        vm.expectRevert("dice: exceeds maxPayout");
+        vm.prank(alice);
+        dice.roll(95, 3_000_000 * 1e18);
+    }
+
     function test_Plinko_OwnerCanRefund() public {
         vm.prank(alice);
         bytes32 id = plinko.drop(8, 5_000 * 1e18);
