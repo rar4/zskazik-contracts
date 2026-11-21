@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 import {GameBase} from "./GameBase.sol";
 
 /// @title CoinFlip — pick a side, 1.96x on win (2% edge)
-/// @dev V1 testnet randomness (see GameBase). Player = msg.sender, must have
+/// @dev V1 testnet randomness (see GameBase). Player = _msgSender(), must have
 ///      approved the TREASURY (not this contract) for the wager.
 contract CoinFlip is GameBase {
     /// @notice 19600 bps = 1.96x payout on win.
@@ -30,7 +30,9 @@ contract CoinFlip is GameBase {
     );
     event FlipCancelled(bytes32 indexed gameBetId, address indexed player, uint256 wager);
 
-    constructor(address treasuryAddr, address initialOwner) GameBase(treasuryAddr, initialOwner) {}
+    constructor(address treasuryAddr, address initialOwner, address trustedForwarder_)
+        GameBase(treasuryAddr, initialOwner, trustedForwarder_)
+    {}
 
     /// @notice Place a flip. Returns the game bet id for tracking/resolve.
     function flip(bool choiceHeads, uint256 wager)
@@ -48,9 +50,9 @@ contract CoinFlip is GameBase {
         require(worst <= treasury.maxPayout(), "flip: exceeds maxPayout");
         require(worst <= wager * treasury.maxWinMultiplier(), "flip: exceeds multiplier");
         bytes32 treasuryBetId;
-        (gameBetId, treasuryBetId) = _nextIds(msg.sender);
+        (gameBetId, treasuryBetId) = _nextIds(_msgSender());
         flips[gameBetId] = Flip({
-            player: msg.sender,
+            player: _msgSender(),
             wager: wager,
             treasuryBetId: treasuryBetId,
             placeBlock: uint64(block.number),
@@ -58,8 +60,8 @@ contract CoinFlip is GameBase {
             settled: false,
             payout: 0
         });
-        treasury.escrowBet(msg.sender, wager, treasuryBetId);
-        emit FlipPlaced(gameBetId, msg.sender, wager, choiceHeads);
+        treasury.escrowBet(_msgSender(), wager, treasuryBetId);
+        emit FlipPlaced(gameBetId, _msgSender(), wager, choiceHeads);
     }
 
     /// @notice Resolve a flip. Permissionless after the placing block.
@@ -84,8 +86,8 @@ contract CoinFlip is GameBase {
         Flip storage f = flips[gameBetId];
         if (f.player == address(0)) revert BetNotFound();
         if (f.settled) revert AlreadySettled();
-        if (msg.sender != f.player && msg.sender != owner()) revert NotBetOwner();
-        if (msg.sender != owner() && block.number <= f.placeBlock + REFUND_TIMEOUT_BLOCKS) {
+        if (_msgSender() != f.player && _msgSender() != owner()) revert NotBetOwner();
+        if (_msgSender() != owner() && block.number <= f.placeBlock + REFUND_TIMEOUT_BLOCKS) {
             revert RefundTooEarly();
         }
         f.settled = true;

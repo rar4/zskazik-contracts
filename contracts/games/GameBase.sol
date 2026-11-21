@@ -5,6 +5,8 @@ import {Treasury} from "../Treasury.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ERC2771Context} from "@openzeppelin/contracts/metatx/ERC2771Context.sol";
+import {Context} from "@openzeppelin/contracts/utils/Context.sol";
 
 /// @title GameBase — shared plumbing for ZSKazik games
 /// @dev Testnet randomness: keccak(treasuryBetId, block.prevrandao, placeBlock),
@@ -12,7 +14,10 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///      PRODUCTION MUST REPLACE `_random` with Chainlink VRF: validator-influenced
 ///      prevrandao is biasable for large payouts. Structure is VRF-ready:
 ///      swap `_random` source + add fulfillRandomWords callback, keep escrow/settle.
-abstract contract GameBase is Ownable2Step, Pausable, ReentrancyGuard {
+///      ERC-2771: bets can arrive via TrustedForwarder (session-key meta-tx);
+///      _msgSender() then returns the real player, so direct and meta bets are
+///      indistinguishable to the game logic below.
+abstract contract GameBase is Ownable2Step, Pausable, ReentrancyGuard, ERC2771Context {
     Treasury public immutable treasury;
     uint256 public gameNonce;
 
@@ -27,7 +32,10 @@ abstract contract GameBase is Ownable2Step, Pausable, ReentrancyGuard {
     error RefundTooEarly();
     error BadTarget();
 
-    constructor(address treasuryAddr, address initialOwner) Ownable(initialOwner) {
+    constructor(address treasuryAddr, address initialOwner, address trustedForwarder_)
+        Ownable(initialOwner)
+        ERC2771Context(trustedForwarder_)
+    {
         require(treasuryAddr != address(0));
         require(initialOwner != address(0));
         treasury = Treasury(treasuryAddr);
@@ -56,5 +64,19 @@ abstract contract GameBase is Ownable2Step, Pausable, ReentrancyGuard {
 
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    // Diamond-inheritance resolution: ERC2771Context already overrides these
+    // from Context — GameBase must take the ERC2771 versions explicitly.
+    function _msgSender() internal view override(ERC2771Context, Context) returns (address) {
+        return super._msgSender();
+    }
+
+    function _msgData() internal view override(ERC2771Context, Context) returns (bytes calldata) {
+        return super._msgData();
+    }
+
+    function _contextSuffixLength() internal view override(ERC2771Context, Context) returns (uint256) {
+        return super._contextSuffixLength();
     }
 }

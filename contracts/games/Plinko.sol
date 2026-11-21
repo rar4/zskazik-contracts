@@ -33,7 +33,9 @@ contract Plinko is GameBase {
     );
     event DropCancelled(bytes32 indexed gameBetId, address indexed player, uint256 wager);
 
-    constructor(address treasuryAddr, address initialOwner) GameBase(treasuryAddr, initialOwner) {}
+    constructor(address treasuryAddr, address initialOwner, address trustedForwarder_)
+        GameBase(treasuryAddr, initialOwner, trustedForwarder_)
+    {}
 
     /// @notice Bin multiplier in bps (10000 = 1x). Pure table, medium-risk curve.
     function multBps(uint8 rows, uint8 bin) public pure returns (uint256) {
@@ -118,9 +120,9 @@ contract Plinko is GameBase {
         require(worst <= treasury.maxPayout(), "plinko: exceeds maxPayout");
         require(worst <= wager * treasury.maxWinMultiplier(), "plinko: exceeds multiplier");
         bytes32 treasuryBetId;
-        (gameBetId, treasuryBetId) = _nextIds(msg.sender);
+        (gameBetId, treasuryBetId) = _nextIds(_msgSender());
         drops[gameBetId] = Drop({
-            player: msg.sender,
+            player: _msgSender(),
             wager: wager,
             treasuryBetId: treasuryBetId,
             placeBlock: uint64(block.number),
@@ -129,8 +131,8 @@ contract Plinko is GameBase {
             bin: 0,
             payout: 0
         });
-        treasury.escrowBet(msg.sender, wager, treasuryBetId);
-        emit DropPlaced(gameBetId, msg.sender, wager, rows);
+        treasury.escrowBet(_msgSender(), wager, treasuryBetId);
+        emit DropPlaced(gameBetId, _msgSender(), wager, rows);
     }
 
     function resolve(bytes32 gameBetId) external nonReentrant whenNotPaused {
@@ -158,8 +160,8 @@ contract Plinko is GameBase {
         Drop storage d = drops[gameBetId];
         if (d.player == address(0)) revert BetNotFound();
         if (d.settled) revert AlreadySettled();
-        if (msg.sender != d.player && msg.sender != owner()) revert NotBetOwner();
-        if (msg.sender != owner() && block.number <= d.placeBlock + REFUND_TIMEOUT_BLOCKS) {
+        if (_msgSender() != d.player && _msgSender() != owner()) revert NotBetOwner();
+        if (_msgSender() != owner() && block.number <= d.placeBlock + REFUND_TIMEOUT_BLOCKS) {
             revert RefundTooEarly();
         }
         d.settled = true;

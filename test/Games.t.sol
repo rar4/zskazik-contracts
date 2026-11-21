@@ -30,9 +30,9 @@ contract GamesTest is Test {
         token = new CasinoToken(owner);
         // multiplier 20 covers dice 19.6x + plinko 16x
         treasury = new Treasury(address(token), owner, 1e12, 1_000_000 * 1e18, 50_000_000 * 1e18, 20, 0);
-        flip = new CoinFlip(address(treasury), owner);
-        dice = new Dice(address(treasury), owner);
-        plinko = new Plinko(address(treasury), owner);
+        flip = new CoinFlip(address(treasury), owner, address(0));
+        dice = new Dice(address(treasury), owner, address(0));
+        plinko = new Plinko(address(treasury), owner, address(0));
 
         vm.startPrank(owner);
         treasury.authorizeGame(address(flip));

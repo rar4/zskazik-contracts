@@ -5,7 +5,7 @@ import {GameBase} from "./GameBase.sol";
 
 /// @title Dice — roll-over 5..95, payout = wager * 98 / (100 - target) (2% edge)
 /// @dev Example: target 50 -> 50% chance, 1.96x. Target 90 -> 10% chance, 9.8x.
-///      Player = msg.sender, must have approved the TREASURY for the wager.
+///      Player = _msgSender(), must have approved the TREASURY for the wager.
 contract Dice is GameBase {
     uint8 public constant MIN_TARGET = 5;
     uint8 public constant MAX_TARGET = 95;
@@ -37,7 +37,9 @@ contract Dice is GameBase {
     );
     event RollCancelled(bytes32 indexed gameBetId, address indexed player, uint256 wager);
 
-    constructor(address treasuryAddr, address initialOwner) GameBase(treasuryAddr, initialOwner) {}
+    constructor(address treasuryAddr, address initialOwner, address trustedForwarder_)
+        GameBase(treasuryAddr, initialOwner, trustedForwarder_)
+    {}
 
     function roll(uint8 target, uint256 wager)
         external
@@ -55,9 +57,9 @@ contract Dice is GameBase {
         require(worst <= treasury.maxPayout(), "dice: exceeds maxPayout");
         require(worst <= wager * treasury.maxWinMultiplier(), "dice: exceeds multiplier");
         bytes32 treasuryBetId;
-        (gameBetId, treasuryBetId) = _nextIds(msg.sender);
+        (gameBetId, treasuryBetId) = _nextIds(_msgSender());
         rolls[gameBetId] = Roll({
-            player: msg.sender,
+            player: _msgSender(),
             wager: wager,
             treasuryBetId: treasuryBetId,
             placeBlock: uint64(block.number),
@@ -66,8 +68,8 @@ contract Dice is GameBase {
             payout: 0,
             roll: 0
         });
-        treasury.escrowBet(msg.sender, wager, treasuryBetId);
-        emit RollPlaced(gameBetId, msg.sender, wager, target);
+        treasury.escrowBet(_msgSender(), wager, treasuryBetId);
+        emit RollPlaced(gameBetId, _msgSender(), wager, target);
     }
 
     function resolve(bytes32 gameBetId) external nonReentrant whenNotPaused {
@@ -90,8 +92,8 @@ contract Dice is GameBase {
         Roll storage r = rolls[gameBetId];
         if (r.player == address(0)) revert BetNotFound();
         if (r.settled) revert AlreadySettled();
-        if (msg.sender != r.player && msg.sender != owner()) revert NotBetOwner();
-        if (msg.sender != owner() && block.number <= r.placeBlock + REFUND_TIMEOUT_BLOCKS) {
+        if (_msgSender() != r.player && _msgSender() != owner()) revert NotBetOwner();
+        if (_msgSender() != owner() && block.number <= r.placeBlock + REFUND_TIMEOUT_BLOCKS) {
             revert RefundTooEarly();
         }
         r.settled = true;

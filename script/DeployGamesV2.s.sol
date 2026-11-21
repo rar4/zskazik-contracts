@@ -15,12 +15,13 @@ import {Treasury} from "../contracts/Treasury.sol";
 contract DeployGamesV2 is Script {
     function run() external {
         address treasuryAddr = vm.envAddress("TREASURY");
+        address forwarderAddr = vm.envAddress("FORWARDER");
         Treasury treasury = Treasury(treasuryAddr);
         require(treasury.activeWager() == 0, "active escrows exist - settle/refund first");
 
         vm.startBroadcast();
-        CoinFlip flip = new CoinFlip(treasuryAddr, msg.sender);
-        Dice dice = new Dice(treasuryAddr, msg.sender);
+        CoinFlip flip = new CoinFlip(treasuryAddr, msg.sender, forwarderAddr);
+        Dice dice = new Dice(treasuryAddr, msg.sender, forwarderAddr);
         treasury.authorizeGame(address(flip));
         treasury.authorizeGame(address(dice));
         treasury.revokeGame(0x22157527B27C4E3174215126c100f66B041cF082);
