@@ -28,8 +28,8 @@ contract GamesTest is Test {
     function setUp() public {
         owner = vm.addr(OWNER_PK);
         token = new CasinoToken(owner);
-        // multiplier 20 covers dice 19.6x + plinko 16x
-        treasury = new Treasury(address(token), owner, 1e12, 1_000_000 * 1e18, 50_000_000 * 1e18, 20, 0);
+        // multiplier 100 covers dice 98x (target 99) + plinko 16x
+        treasury = new Treasury(address(token), owner, 1e12, 1_000_000 * 1e18, 50_000_000 * 1e18, 100, 0);
         flip = new CoinFlip(address(treasury), owner, address(0));
         dice = new Dice(address(treasury), owner, address(0));
         plinko = new Plinko(address(treasury), owner, address(0));
@@ -180,10 +180,17 @@ contract GamesTest is Test {
     function test_Dice_BadTargetReverts() public {
         vm.expectRevert(GameBase.BadTarget.selector);
         vm.prank(bob);
-        dice.roll(4, 1_000 * 1e18);
+        dice.roll(0, 1_000 * 1e18);
         vm.expectRevert(GameBase.BadTarget.selector);
         vm.prank(bob);
-        dice.roll(96, 1_000 * 1e18);
+        dice.roll(100, 1_000 * 1e18);
+    }
+
+    function test_Dice_EdgeTargetsAccepted() public {
+        vm.prank(bob);
+        dice.roll(1, 1_000 * 1e18);
+        vm.prank(bob);
+        dice.roll(99, 1_000 * 1e18);
     }
 
     function _diceInfo(bytes32 id)

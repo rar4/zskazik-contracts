@@ -12,8 +12,16 @@ Deployed 2026-11-21 from the burner wallet (master/owner):
 | Treasury   | 0xa84A9505753e0bE52486E181bD9dde77D261ad56 |
 | Forwarder  | 0x0FA6F0693cd56D6dE6DD0297C75CCf41FafCbda7 |
 | CoinFlip   | 0xAF7fDDa566905860D6BF3AdB4cd73Dc771Fab366 |
-| Dice       | 0xDcCBA84D53BF3daa275f57cA7e81b202892EfC14 |
+| Dice (V3)  | 0xfC1dB725d0dEd61618E76152610c39147B42eff7 |
 | Plinko     | 0xdDe34251ad0E1EeD50602680FACdA3e4C66E7f08 |
+
+Dice V3 (2026-11-25): roll-over targets 1..99 (was 5..95), up to 98x at
+target 99. Treasury maxWinMultiplier raised 20 -> 100 (other limits
+unchanged: minBet 0.001, maxBet 1M, maxPayout 10M, exposure 5M).
+Previous Dice 0xDcCBA84D53BF3daa275f57cA7e81b202892EfC14 stays authorised
+until its escrows settle, then revoke it. Deploy:
+`TREASURY=0xa84A...ad56 FORWARDER=0x0FA6...bda7 forge script
+script/DeployDiceV3.s.sol --rpc-url https://sepolia.base.org --broadcast`.
 
 Games use ERC-2771 (_msgSender), so bets can arrive via the TrustedForwarder
 session-key meta-tx flow (0 wallet popups after one-time setSigner).

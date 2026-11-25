@@ -3,12 +3,13 @@ pragma solidity ^0.8.30;
 
 import {GameBase} from "./GameBase.sol";
 
-/// @title Dice — roll-over 5..95, payout = wager * 98 / (100 - target) (2% edge)
+/// @title Dice — roll-over 1..99, payout = wager * 98 / (100 - target) (2% edge)
 /// @dev Example: target 50 -> 50% chance, 1.96x. Target 90 -> 10% chance, 9.8x.
+///      Target 99 -> 1% chance, 98x (Treasury maxWinMultiplier must be >= 98).
 ///      Player = _msgSender(), must have approved the TREASURY for the wager.
 contract Dice is GameBase {
-    uint8 public constant MIN_TARGET = 5;
-    uint8 public constant MAX_TARGET = 95;
+    uint8 public constant MIN_TARGET = 1;
+    uint8 public constant MAX_TARGET = 99;
     /// @notice Numerator of the 98% RTP payout: payout = wager * 98 / (100 - target).
     uint256 public constant PAYOUT_NUM = 98;
 
@@ -50,7 +51,7 @@ contract Dice is GameBase {
         if (wager == 0) revert ZeroWager();
         if (target < MIN_TARGET || target > MAX_TARGET) revert BadTarget();
         // Fail fast at placement instead of stranding at settle (same
-        // pre-check Plinko does): at target 95 the payout is 19.6x, so a
+        // pre-check Plinko does): at target 99 the payout is 98x, so a
         // large wager can exceed maxPayout and settleBet would revert
         // forever, stranding the stake until the refund timeout.
         uint256 worst = (wager * PAYOUT_NUM) / (100 - target);
