@@ -7,7 +7,7 @@ import {CasinoToken} from "../contracts/CasinoToken.sol";
 
 /// @notice Deploys Treasury linked to an existing CasinoToken.
 /// @dev Usage:
-///      CASINO_TOKEN=0xToken INITIAL_OWNER=0xMultisig \
+///      CASINO_TOKEN=0xToken INITIAL_OWNER=0xMultisig BURN_THRESHOLD=20000000000000000000000000 \
 ///      MIN_BET=1000000000000000 MAX_BET=1000000000000000000000000 \
 ///      MAX_PAYOUT=10000000000000000000000000 WIN_MULT=10 MAX_EXPOSURE=5000000000000000000000000 \
 ///      forge script script/DeployTreasury.s.sol --rpc-url <RPC> --broadcast
@@ -29,6 +29,10 @@ contract DeployTreasury is Script {
         Treasury treasury = new Treasury(
             tokenAddr, initialOwner, minBet, maxBet, maxPayout, winMult, maxExposure
         );
+        uint256 burnThreshold = vm.envOr("BURN_THRESHOLD", uint256(20_000_000 * 1e18));
+        if (burnThreshold != treasury.burnThreshold()) {
+            treasury.setBurnThreshold(burnThreshold);
+        }
         vm.stopBroadcast();
 
         console.log("Treasury deployed at:", address(treasury));
@@ -39,6 +43,7 @@ contract DeployTreasury is Script {
         console.log("maxPayout:", treasury.maxPayout());
         console.log("maxWinMultiplier:", treasury.maxWinMultiplier());
         console.log("maxTotalExposure:", treasury.maxTotalExposure());
+        console.log("burnThreshold:", treasury.burnThreshold());
         console.log("NEXT: token.setTreasury() from token owner:");
         console.log("  token:", tokenAddr);
         console.log("  value:", address(treasury));

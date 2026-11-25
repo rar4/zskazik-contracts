@@ -8,19 +8,25 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/// @title ZSKazik Treasury — bankroll + atomic 50/50 loss split
+/// @title ZSKazik Treasury — bankroll + threshold burn above 20M
 /// @notice Accounting layer for the casino. Holds ZSKAZIK bankroll, escrows bets
-///         from authorized game contracts, pays wins, and executes the deflation
-///         split on losses (burn half / keep half) ATOMICALLY in one tx.
+///         from authorized game contracts, pays wins, and keeps the full lost
+///         wager. Nothing is burned while the bankroll is at or below
+///         burnThreshold (20M ZSK); on settle, only the amount above the
+///         threshold is burned, so the bankroll grows steadily up to 20M
+///         and any surplus above it is burned instead of accumulating.
 /// @dev Games depend on Treasury; Treasury depends only on CasinoToken.
 ///      Randomness/RTP live in game contracts (use Chainlink VRF, never
 ///      block.timestamp alone). Treasury only enforces: auth, limits, solvency,
 ///      no-double-settle, CEI + reentrancy guard.
 ///
-///      Bet lifecycle: escrowBet (locks stake) -> settleBet (win pays / loss burns)
-///      or splitLossDirect (pull+burn in one, no escrow). Stuck escrows (VRF fail,
+///      Bet lifecycle: escrowBet (locks stake) -> settleBet (win pays / loss keeps)
+///      or splitLossDirect (pull+keep in one, no escrow). Stuck escrows (VRF fail,
 ///      revoked game) are recoverable via cancelBet (game) / emergencyRefundBet
 ///      (owner -> player, works even while paused).
+///      Threshold burn: after a settle, any bankroll above burnThreshold is
+///      burned (never below activeWager). Deposits and escrows do not auto-burn
+///      — raise burnThreshold first if the bankroll must be funded above it.
 contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -61,6 +67,11 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Max sum of unsettled wagers. 0 = uncapped (not recommended).
     uint256 public maxTotalExposure;
 
+    /// @notice Bankroll cap for the threshold burn. 20M ZSK (18 decimals).
+    /// @dev Below or at this amount nothing is burned on settle; only the
+    ///      amount above it is burned. Owner-settable; 0 disables the burn.
+    uint256 public burnThreshold;
+
     // ------------------------------------------------------------------------
     // Errors / events
     // ------------------------------------------------------------------------
@@ -96,6 +107,8 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
     event LossSplit(
         bytes32 indexed betId, address indexed player, uint256 wager, uint256 burned, uint256 kept
     );
+    event BurnThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+    event ExcessBurned(uint256 burned, uint256 bankrollAfter);
 
     modifier onlyGame() {
         if (!isGame[msg.sender]) revert UnauthorizedGame(msg.sender);
@@ -104,7 +117,7 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @param tokenAddr Deployed CasinoToken address.
     /// @param initialOwner Multisig that owns pause/limits/game-list. Must not be 0.
-    /// @param minBet_ Minimum wager (dust guard; >= 2 wei so burns are non-zero).
+    /// @param minBet_ Minimum wager (dust guard).
     /// @param maxBet_ Per-bet wager cap.
     /// @param maxPayout_ Per-bet absolute payout cap.
     /// @param maxWinMultiplier_ Per-bet relative cap (payout <= wager * multiplier).
@@ -126,6 +139,7 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
         maxPayout = maxPayout_;
         maxWinMultiplier = maxWinMultiplier_;
         maxTotalExposure = maxTotalExposure_;
+        burnThreshold = 20_000_000 * 1e18;
         emit LimitsUpdated(minBet_, maxBet_, maxPayout_, maxWinMultiplier_, maxTotalExposure_);
     }
 
@@ -162,6 +176,15 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
         maxWinMultiplier = maxWinMultiplier_;
         maxTotalExposure = maxTotalExposure_;
         emit LimitsUpdated(minBet_, maxBet_, maxPayout_, maxWinMultiplier_, maxTotalExposure_);
+    }
+
+    /// @notice Update the threshold-burn cap. 0 disables the threshold burn.
+    /// @dev Raise this before funding the bankroll above the current
+    ///      threshold, or the excess will be burned on the next settle.
+    function setBurnThreshold(uint256 newThreshold) external onlyOwner {
+        uint256 oldThreshold = burnThreshold;
+        burnThreshold = newThreshold;
+        emit BurnThresholdUpdated(oldThreshold, newThreshold);
     }
 
     function pause() external onlyOwner {
@@ -220,6 +243,40 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
         return bank >= activeWager ? bank - activeWager : 0;
     }
 
+    /// @notice Amount that would be burned now under the threshold rule.
+    /// @dev 0 when disabled, at/below threshold, or when activeWager alone
+    ///      already exceeds the threshold (escrows are never burned).
+    function excessOverThreshold() external view returns (uint256) {
+        uint256 threshold = burnThreshold;
+        if (threshold == 0) return 0;
+        uint256 bank = token.balanceOf(address(this));
+        if (bank <= threshold) return 0;
+        uint256 floor = threshold > activeWager ? threshold : activeWager;
+        return bank > floor ? bank - floor : 0;
+    }
+
+    /// @notice Manually burn the amount above burnThreshold (owner only).
+    /// @dev Auto-burn already runs on settle; this trims a bankroll that was
+    ///      funded above the threshold via deposit. Returns amount burned.
+    function burnExcessOverThreshold() external nonReentrant onlyOwner returns (uint256) {
+        return _burnExcessOverThreshold();
+    }
+
+    /// @dev Burn bankroll above burnThreshold, never below activeWager.
+    ///      Returns 0 when disabled or at/below threshold.
+    function _burnExcessOverThreshold() internal returns (uint256 burned) {
+        uint256 threshold = burnThreshold;
+        if (threshold == 0) return 0;
+        uint256 bank = token.balanceOf(address(this));
+        if (bank <= threshold) return 0;
+        uint256 floor = threshold > activeWager ? threshold : activeWager;
+        if (bank <= floor) return 0;
+        burned = bank - floor;
+        totalBurnedViaTreasury += burned;
+        token.burn(burned);
+        emit ExcessBurned(burned, bank - burned);
+    }
+
     // ------------------------------------------------------------------------
     // Betting lifecycle (games only)
     // ------------------------------------------------------------------------
@@ -273,8 +330,11 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice Settle an escrowed bet exactly once.
     /// @param betId Bet created by escrowBet().
-    /// @param payout 0 = loss (burn half / keep half); >0 = win (transfer payout).
+    /// @param payout 0 = loss (Treasury keeps full wager); >0 = win (transfer payout).
     /// @dev Payout INCLUDES returned stake (bet 100 at 2x -> payout 200).
+    ///      After the payout/keep, any bankroll above burnThreshold is burned
+    ///      (never below the remaining activeWager). Below the threshold
+    ///      nothing is burned, so the bankroll keeps the full loss.
     ///      CEI: settled + active decremented BEFORE external calls.
     function settleBet(bytes32 betId, uint256 payout)
         external
@@ -298,20 +358,18 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
             if (payout > bank) revert InsolventBankroll(payout, bank);
             totalPaidOut += payout;
             IERC20(address(token)).safeTransfer(b.player, payout);
+            uint256 burned = _burnExcessOverThreshold();
             // forge-lint: disable-next-line(reentrancy-events)
-            emit BetSettled(betId, b.player, b.wager, payout, 0);
+            emit BetSettled(betId, b.player, b.wager, payout, burned);
         } else {
-            // Loss: 50/50 split. Floor burn, remainder stays (odd wei -> treasury).
-            uint256 burnHalf = b.wager / 2;
-            uint256 kept = b.wager - burnHalf;
-            if (burnHalf > 0) {
-                totalBurnedViaTreasury += burnHalf;
-                token.burn(burnHalf);
-            }
+            // Loss: Treasury keeps the full wager. Only the amount above
+            // burnThreshold is burned; below it nothing is burned.
+            uint256 burned = _burnExcessOverThreshold();
+            uint256 kept = burned >= b.wager ? 0 : b.wager - burned;
             // forge-lint: disable-next-line(reentrancy-events)
-            emit LossSplit(betId, b.player, b.wager, burnHalf, kept);
+            emit LossSplit(betId, b.player, b.wager, burned, kept);
             // forge-lint: disable-next-line(reentrancy-events)
-            emit BetSettled(betId, b.player, b.wager, 0, burnHalf);
+            emit BetSettled(betId, b.player, b.wager, 0, burned);
         }
     }
 
@@ -345,9 +403,10 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
         emit BetCancelled(betId, b.player, b.wager, msg.sender);
     }
 
-    /// @notice No-escrow path: pull stake and split loss in ONE tx.
+    /// @notice No-escrow path: pull stake and keep loss in ONE tx.
     /// @dev For simple games that skip escrow. Requires full allowance.
-    ///      Transfers full amount in, burns half. Marked settled at creation.
+    ///      Transfers full amount in, keeps it, burns only the amount above
+    ///      burnThreshold. Marked settled at creation.
     function splitLossDirect(address player, uint256 amount, bytes32 betId)
         external
         nonReentrant
@@ -365,15 +424,11 @@ contract Treasury is Ownable2Step, Pausable, ReentrancyGuard {
 
         IERC20(address(token)).safeTransferFrom(player, address(this), amount);
 
-        uint256 burnHalf = amount / 2;
-        uint256 kept = amount - burnHalf;
-        if (burnHalf > 0) {
-            totalBurnedViaTreasury += burnHalf;
-            token.burn(burnHalf);
-        }
+        uint256 burned = _burnExcessOverThreshold();
+        uint256 kept = burned >= amount ? 0 : amount - burned;
         // forge-lint: disable-next-line(reentrancy-events)
-        emit LossSplit(betId, player, amount, burnHalf, kept);
+        emit LossSplit(betId, player, amount, burned, kept);
         // forge-lint: disable-next-line(reentrancy-events)
-        emit BetSettled(betId, player, amount, 0, burnHalf);
+        emit BetSettled(betId, player, amount, 0, burned);
     }
 }

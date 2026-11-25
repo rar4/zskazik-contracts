@@ -93,6 +93,7 @@ contract TreasuryTest is Test {
         assertEq(treasury.maxPayout(), MAX_PAYOUT);
         assertEq(treasury.maxWinMultiplier(), MULTIPLIER);
         assertEq(treasury.maxTotalExposure(), MAX_EXPOSURE);
+        assertEq(treasury.burnThreshold(), 20_000_000 * 1e18);
         assertTrue(treasury.isGame(game));
         assertEq(treasury.bankroll(), BANKROLL);
         assertEq(token.treasury(), address(treasury));
@@ -128,6 +129,18 @@ contract TreasuryTest is Test {
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         vm.prank(alice);
         treasury.authorizeGame(bob);
+    }
+
+    function test_Admin_SetBurnThreshold() public {
+        vm.expectEmit(false, false, false, true);
+        emit Treasury.BurnThresholdUpdated(20_000_000 * 1e18, 30_000_000 * 1e18);
+        vm.prank(owner);
+        treasury.setBurnThreshold(30_000_000 * 1e18);
+        assertEq(treasury.burnThreshold(), 30_000_000 * 1e18);
+
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        vm.prank(alice);
+        treasury.setBurnThreshold(1);
     }
 
     function test_Admin_SetLimits() public {
@@ -412,26 +425,68 @@ contract TreasuryTest is Test {
     }
 
     // ========================================================================
-    // Settle: losses (50/50)
+    // Settle: losses (threshold burn: keep full below 20M, burn excess above)
     // ========================================================================
 
-    function test_Settle_LossBurnsHalf() public {
+    function test_Settle_LossAtThresholdBurnsExcess() public {
         uint256 wager = 100_000 * 1e18;
         bytes32 id = _betId();
         vm.prank(game);
         treasury.escrowBet(alice, wager, id);
 
-        uint256 bankBefore = treasury.bankroll();
         uint256 burnedBefore = token.totalBurned();
 
         vm.prank(game);
         treasury.settleBet(id, 0);
 
-        uint256 burnHalf = wager / 2;
-        assertEq(token.totalBurned(), burnedBefore + burnHalf);
-        assertEq(treasury.totalBurnedViaTreasury(), burnHalf);
-        assertEq(treasury.bankroll(), bankBefore - burnHalf);
+        // Bankroll was at the 20M threshold, escrow pushed it above, so
+        // the full wager (the excess) is burned and the bank stays at 20M.
+        assertEq(token.totalBurned(), burnedBefore + wager);
+        assertEq(treasury.totalBurnedViaTreasury(), wager);
+        assertEq(treasury.bankroll(), BANKROLL);
         assertEq(treasury.activeWager(), 0);
+    }
+
+    function test_Settle_LossBelowThresholdKeepsFullNoBurn() public {
+        // Drop below the threshold first.
+        vm.prank(owner);
+        treasury.withdraw(owner, 1_000_000 * 1e18);
+        assertEq(treasury.bankroll(), BANKROLL - 1_000_000 * 1e18);
+
+        uint256 wager = 100_000 * 1e18;
+        bytes32 id = _betId();
+        vm.prank(game);
+        treasury.escrowBet(alice, wager, id);
+
+        uint256 burnedBefore = token.totalBurned();
+        uint256 bankBefore = treasury.bankroll();
+
+        vm.prank(game);
+        treasury.settleBet(id, 0);
+
+        // Below 20M: nothing burned, Treasury keeps the full wager.
+        assertEq(token.totalBurned(), burnedBefore);
+        assertEq(treasury.totalBurnedViaTreasury(), 0);
+        assertEq(treasury.bankroll(), bankBefore);
+        assertEq(treasury.activeWager(), 0);
+    }
+
+    function test_Settle_LossCrossingThresholdBurnsOnlyExcess() public {
+        // Bankroll 100 ZSK below the threshold: only part of the wager is excess.
+        vm.prank(owner);
+        treasury.withdraw(owner, 100 * 1e18);
+
+        uint256 wager = 1_000 * 1e18;
+        bytes32 id = _betId();
+        vm.prank(game);
+        treasury.escrowBet(alice, wager, id);
+
+        vm.prank(game);
+        treasury.settleBet(id, 0);
+
+        // Kept 100 to reach 20M, burned the remaining 900 excess.
+        assertEq(treasury.bankroll(), BANKROLL);
+        assertEq(treasury.totalBurnedViaTreasury(), 900 * 1e18);
     }
 
     function test_Settle_LossOddWei() public {
@@ -444,27 +499,75 @@ contract TreasuryTest is Test {
         treasury.escrowBet(bob, wager, id);
         vm.prank(game);
         treasury.settleBet(id, 0);
-        // floor burn 50, treasury keeps 51
-        assertEq(treasury.totalBurnedViaTreasury(), 50);
+        // At the threshold the whole odd wager is excess and is burned.
+        assertEq(treasury.totalBurnedViaTreasury(), 101);
     }
 
-    function test_SplitLossDirect_PullAndBurn() public {
+    function test_SplitLossDirect_PullAndBurnExcess() public {
         uint256 amount = 40_000 * 1e18;
         bytes32 id = _betId();
         uint256 aliceBefore = token.balanceOf(alice);
         uint256 bankBefore = treasury.bankroll();
 
+        // _burnExcessOverThreshold emits ExcessBurned before LossSplit.
+        vm.expectEmit(false, false, false, true);
+        emit Treasury.ExcessBurned(amount, bankBefore);
         vm.expectEmit(true, true, false, true);
-        emit Treasury.LossSplit(id, alice, amount, amount / 2, amount - amount / 2);
+        emit Treasury.LossSplit(id, alice, amount, amount, 0);
         vm.prank(game);
         treasury.splitLossDirect(alice, amount, id);
 
         assertEq(token.balanceOf(alice), aliceBefore - amount);
-        // bank: +amount in, -amount/2 burned
-        assertEq(treasury.bankroll(), bankBefore + amount - amount / 2);
+        // bank: +amount in, -amount burned (all excess over 20M)
+        assertEq(treasury.bankroll(), bankBefore);
         (, , bool settled) = treasury.bets(id);
         assertTrue(settled);
         assertEq(treasury.activeWager(), 0); // never entered active set
+    }
+
+    function test_BurnExcess_ManualOwnerOnly() public {
+        // Deposit does not auto-burn; the excess is visible and trimmable.
+        vm.prank(bob);
+        treasury.deposit(50_000 * 1e18);
+        assertEq(treasury.bankroll(), BANKROLL + 50_000 * 1e18);
+        assertEq(treasury.excessOverThreshold(), 50_000 * 1e18);
+
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        vm.prank(alice);
+        treasury.burnExcessOverThreshold();
+
+        vm.prank(owner);
+        uint256 burned = treasury.burnExcessOverThreshold();
+        assertEq(burned, 50_000 * 1e18);
+        assertEq(treasury.bankroll(), BANKROLL);
+        assertEq(treasury.excessOverThreshold(), 0);
+    }
+
+    function test_BurnExcess_NeverBelowActiveWager() public {
+        // Lower the threshold below the escrow: burn must stop at activeWager.
+        vm.prank(owner);
+        treasury.setBurnThreshold(1_000 * 1e18);
+        bytes32 id = _betId();
+        uint256 wager = 100_000 * 1e18;
+        vm.prank(game);
+        treasury.escrowBet(alice, wager, id);
+
+        assertEq(treasury.excessOverThreshold(), BANKROLL + wager - wager);
+        vm.prank(owner);
+        treasury.burnExcessOverThreshold();
+        assertEq(treasury.bankroll(), wager);
+        assertEq(treasury.activeWager(), wager);
+    }
+
+    function test_BurnExcess_DisabledAtZero() public {
+        vm.prank(owner);
+        treasury.setBurnThreshold(0);
+        vm.prank(bob);
+        treasury.deposit(50_000 * 1e18);
+        assertEq(treasury.excessOverThreshold(), 0);
+        vm.prank(owner);
+        assertEq(treasury.burnExcessOverThreshold(), 0);
+        assertEq(treasury.bankroll(), BANKROLL + 50_000 * 1e18);
     }
 
     // ========================================================================
@@ -540,8 +643,9 @@ contract TreasuryTest is Test {
         vm.prank(game);
         treasury.settleBet(id, 0);
 
-        uint256 burnHalf = wager / 2;
-        assertEq(treasury.bankroll(), bankBefore + (wager - burnHalf));
+        // Bankroll starts at the 20M threshold, so the whole wager is excess
+        // and is burned; the bank returns to bankBefore.
+        assertEq(treasury.bankroll(), bankBefore);
         assertEq(treasury.activeWager(), 0);
     }
 

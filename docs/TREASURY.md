@@ -1,7 +1,8 @@
 # ZSKazik Treasury
 
 Bankroll + accounting layer. Holds ZSKAZIK, escrows bets from authorized games,
-pays wins, burns half of each loss. `contracts/Treasury.sol`
+pays wins, keeps the full lost wager, and burns only the bankroll above
+`burnThreshold` (20M ZSK). `contracts/Treasury.sol`
 (OZ `Ownable2Step`, `Pausable`, `ReentrancyGuard`, `SafeERC20`).
 
 ## Lifecycle
@@ -11,11 +12,23 @@ Player approves Treasury
   -> game.escrowBet(player, wager, betId)   // transferFrom player -> treasury
   -> game.settleBet(betId, payout)          // payout>0 win / payout==0 loss
        win:  transfer(player, payout)        // payout INCLUDES stake (100 at 2x = 200)
-       loss: burn(wager/2), keep wager-wager/2
+       loss: keep full wager; burn only bankroll above burnThreshold (20M)
 ```
 
-No-escrow shortcut: `splitLossDirect(player, amount, betId)` pulls + burns half
-in one tx. One-tx UX: `depositWithPermit` / `escrowBetWithPermit` (EIP-2612).
+No-escrow shortcut: `splitLossDirect(player, amount, betId)` pulls + keeps
+in one tx, burning only the amount above the threshold. One-tx UX:
+`depositWithPermit` / `escrowBetWithPermit` (EIP-2612).
+
+## Threshold burn
+
+- `burnThreshold` defaults to 20M ZSK, owner-set via `setBurnThreshold`
+  (`0` disables). Below the threshold nothing is burned, so the bankroll
+  keeps the full loss and grows steadily toward 20M.
+- On settle (win or loss) and `splitLossDirect`, any bankroll above the
+  threshold is burned, never below `activeWager`. `excessOverThreshold()`
+  shows the burnable amount; `burnExcessOverThreshold()` (owner) trims a
+  bankroll funded above the threshold via `deposit` (deposits do not
+  auto-burn — raise the threshold first if funding above it).
 
 ## Caps (all owner-set, `setLimits`)
 
@@ -70,6 +83,8 @@ token.transfer(treasury, bankroll); # or approve + treasury.deposit()
 - `cancelBet` + `emergencyRefundBet` close the stuck-escrow hole.
 - Permit variants for one-tx bet/deposit.
 - `nonReentrant` first, state before external calls, custom errors, full events.
-- 35 Treasury tests: auth, escrow/settle win/loss, odd-wei split (101 -> burn 50 keep 51),
+- 41 Treasury tests: auth, escrow/settle win/loss, threshold burn (below keeps
+  full, at cap burns excess, crossing burns only the excess, manual burn,
+  activeWager floor, disabled at 0),
   double-settle/duplicate/revoke guards, cap/exposure/insolvency reverts, pause matrix,
   permit flows, fuzz win/loss accounting.

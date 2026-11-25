@@ -38,7 +38,9 @@ contract GamesTest is Test {
         treasury.authorizeGame(address(flip));
         treasury.authorizeGame(address(dice));
         treasury.authorizeGame(address(plinko));
-        // bankroll 50M
+        // bankroll 50M: raise the threshold burn cap to match, so the excess
+        // burned on settle is the wager itself, not the deposit above 20M.
+        treasury.setBurnThreshold(50_000_000 * 1e18);
         token.approve(address(treasury), 50_000_000 * 1e18);
         treasury.deposit(50_000_000 * 1e18);
         token.transfer(alice, 2_000_000 * 1e18);
@@ -96,14 +98,15 @@ contract GamesTest is Test {
         assertEq(token.balanceOf(alice), 2_000_000 * 1e18 - 10_000 * 1e18 + pay);
     }
 
-    function test_Flip_LossBurnsHalf() public {
+    function test_Flip_LossAtThresholdBurnsExcess() public {
         uint256 burnedBefore = token.totalBurned();
         uint256 bankBefore = treasury.bankroll();
         vm.prank(alice);
         bytes32 id = flip.flip(true, 10_000 * 1e18);
         _resolveFlip(id, false, true);
-        assertEq(token.totalBurned(), burnedBefore + 5_000 * 1e18);
-        assertEq(treasury.bankroll(), bankBefore + 5_000 * 1e18); // kept half
+        // At the cap the full lost wager is excess and is burned.
+        assertEq(token.totalBurned(), burnedBefore + 10_000 * 1e18);
+        assertEq(treasury.bankroll(), bankBefore);
     }
 
     function test_Flip_SameBlockResolveReverts() public {
@@ -159,8 +162,9 @@ contract GamesTest is Test {
         assertEq(pay, (10_000 * 1e18 * 98) / 50);
     }
 
-    function test_Dice_LossBurns() public {
+    function test_Dice_LossBurnsExcess() public {
         uint256 burnedBefore = token.totalBurned();
+        uint256 bankBefore = treasury.bankroll();
         vm.prank(bob);
         bytes32 id = dice.roll(90, 5_000 * 1e18); // 10% chance
         (bytes32 tBetId, uint256 pb) = _diceSeed(id);
@@ -168,7 +172,9 @@ contract GamesTest is Test {
         vm.roll(block.number + 1);
         vm.prevrandao(pr);
         dice.resolve(id);
-        assertEq(token.totalBurned(), burnedBefore + 2_500 * 1e18);
+        // At the cap the full lost wager is excess and is burned.
+        assertEq(token.totalBurned(), burnedBefore + 5_000 * 1e18);
+        assertEq(treasury.bankroll(), bankBefore);
     }
 
     function test_Dice_BadTargetReverts() public {
@@ -233,14 +239,15 @@ contract GamesTest is Test {
         assertEq(p, alice);
         assertTrue(s);
         assertEq(pay, (w * plinko.multBps(8, bin)) / 10_000);
-        // bankAfterEscrow already includes the escrowed wager; win pays out of it,
-        // loss burns half of the wager from it.
-        uint256 burned = pay == 0 ? w / 2 : 0;
-        assertEq(treasury.bankroll(), bankAfterEscrow - pay - burned);
+        // bankAfterEscrow already includes the escrowed wager; win pays out of it.
+        // Any remaining bankroll above the threshold (50M here) is burned.
+        uint256 afterPay = bankAfterEscrow - pay;
+        uint256 cap = 50_000_000 * 1e18;
+        assertEq(treasury.bankroll(), afterPay > cap ? cap : afterPay);
     }
 
     function _burnedFor(uint256 wager, uint256 payout) internal pure returns (uint256) {
-        return payout == 0 ? wager / 2 : 0;
+        return payout == 0 ? wager : 0;
     }
 
     function test_Plinko_ExceedsPayoutRevertsAtPlace() public {
