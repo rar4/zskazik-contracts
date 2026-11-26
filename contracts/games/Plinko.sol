@@ -125,7 +125,7 @@ contract Plinko is GameBase {
             player: _msgSender(),
             wager: wager,
             treasuryBetId: treasuryBetId,
-            placeBlock: uint64(block.number),
+            placeBlock: uint64(_l2BlockNumber()),
             rows: rows,
             settled: false,
             bin: 0,
@@ -161,7 +161,7 @@ contract Plinko is GameBase {
         if (d.player == address(0)) revert BetNotFound();
         if (d.settled) revert AlreadySettled();
         if (_msgSender() != d.player && _msgSender() != owner()) revert NotBetOwner();
-        if (_msgSender() != owner() && block.number <= d.placeBlock + REFUND_TIMEOUT_BLOCKS) {
+        if (_msgSender() != owner() && _l2BlockNumber() <= d.placeBlock + REFUND_TIMEOUT_BLOCKS) {
             revert RefundTooEarly();
         }
         d.settled = true;

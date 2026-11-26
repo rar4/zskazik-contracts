@@ -63,7 +63,7 @@ contract Dice is GameBase {
             player: _msgSender(),
             wager: wager,
             treasuryBetId: treasuryBetId,
-            placeBlock: uint64(block.number),
+            placeBlock: uint64(_l2BlockNumber()),
             target: target,
             settled: false,
             payout: 0,
@@ -94,7 +94,7 @@ contract Dice is GameBase {
         if (r.player == address(0)) revert BetNotFound();
         if (r.settled) revert AlreadySettled();
         if (_msgSender() != r.player && _msgSender() != owner()) revert NotBetOwner();
-        if (_msgSender() != owner() && block.number <= r.placeBlock + REFUND_TIMEOUT_BLOCKS) {
+        if (_msgSender() != owner() && _l2BlockNumber() <= r.placeBlock + REFUND_TIMEOUT_BLOCKS) {
             revert RefundTooEarly();
         }
         r.settled = true;

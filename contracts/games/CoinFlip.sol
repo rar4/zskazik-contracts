@@ -55,7 +55,7 @@ contract CoinFlip is GameBase {
             player: _msgSender(),
             wager: wager,
             treasuryBetId: treasuryBetId,
-            placeBlock: uint64(block.number),
+            placeBlock: uint64(_l2BlockNumber()),
             choiceHeads: choiceHeads,
             settled: false,
             payout: 0
@@ -87,7 +87,7 @@ contract CoinFlip is GameBase {
         if (f.player == address(0)) revert BetNotFound();
         if (f.settled) revert AlreadySettled();
         if (_msgSender() != f.player && _msgSender() != owner()) revert NotBetOwner();
-        if (_msgSender() != owner() && block.number <= f.placeBlock + REFUND_TIMEOUT_BLOCKS) {
+        if (_msgSender() != owner() && _l2BlockNumber() <= f.placeBlock + REFUND_TIMEOUT_BLOCKS) {
             revert RefundTooEarly();
         }
         f.settled = true;
